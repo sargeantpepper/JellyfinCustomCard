@@ -27,13 +27,12 @@ All entities default to JellyHA's names, so no config is needed.
 |---|---|---|
 | `entity` | `sensor.jellyha_movies` | Film count |
 | `clients_entity` | `sensor.jellyha_connected_clients` | Active clients |
-| `storage_entity` | `sensor.jellyha_media_storage_free` | Used by the `disk_used` / `disk_free` boxes |
 | `library_entity` | `sensor.jellyha_library` | Fallback: uses its movies/series/episodes attributes if a count sensor is missing |
 | `latest_entity` | `sensor.jellyha_latest_movie` | Latest film |
 | `version_entity` | `sensor.jellyha_jellyfin_version` | Jellyfin version |
 | `title` / `subtitle` | `Film Collection` / `Jellyfin` | Header text |
 | `show_extras` | `true` | Show the boxes |
-| `boxes` | series, episodes, clients | List of up to 4 boxes. `[]` hides the row. See below |
+| `boxes` | series, episodes, clients | Up to 4 boxes, each a sensor. See below |
 | `show_latest` | `true` | Latest added section |
 | `show_now_playing` | `true` | Now watching list |
 | `show_paused` | `true` | Include paused sessions |
@@ -41,22 +40,20 @@ All entities default to JellyHA's names, so no config is needed.
 | `film_tap_action`, `latest_tap_action` | `more-info` | Tap actions for the film count and latest added |
 
 ## Boxes
-Add, remove and reorder up to four boxes under the film count in the visual editor, or in YAML:
+Up to four boxes under the film count, each showing any sensor. Add, remove and reorder them in the visual editor, or in YAML:
 
 ```yaml
 type: custom:jellyfin-library-card
 boxes:
-  - type: series        # series | episodes | songs | albums | artists | videos | movies | clients
-                        # | disk_used | disk_free | library_size | custom
-  - type: episodes
-  - type: songs
-  - type: custom        # any numeric sensor
-    name: Playlists     # optional label
-    entity: sensor.my_playlists
-    attribute: count    # optional: read an attribute instead of the state
-    tap_action:         # optional
+  - entity: sensor.jellyha_series
+  - entity: sensor.jellyha_connected_clients
+    name: Active clients        # optional label (default: the sensor's name)
+  - entity: sensor.jellyha_library
+    attribute: songs            # optional: show an attribute instead of the state
+  - entity: sensor.jellyha_media_storage_free
+    tap_action:                 # optional, any standard HA action
       action: none
 ```
-`disk_used` and `disk_free` read the storage sensor; `library_size` adds up every `sensor.jellyha_library_*_storage_size`. A box opens its own sensor when tapped.
+Units are shown, and GB/TB-style sensors step up automatically (3500 GB shows as 3.5 TB). Tapping a box opens its sensor unless you set a `tap_action`. `boxes: []` hides the row. With no `boxes`, you get series, episodes and active clients.
 
-With no `boxes`, you get series, episodes and active clients. `boxes: []` hides the row. The older `box1_type` ... `box4_type` settings still work.
+Boxes made with the older type picker (`type: series`, `box1_type`, ...) keep working.

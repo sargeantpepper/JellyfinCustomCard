@@ -28,24 +28,20 @@
  *    show_paused: true          # include paused sessions
  *    players: [media_player.jellyha_admin]   # optional; default = all media_player.jellyha_* players
  *
- *  BOXES - up to four boxes under the film count. Add, remove and reorder them in the visual
- *  editor, or in YAML (remove the list, or use `boxes: []`, to hide the row):
+ *  BOXES - up to four boxes under the film count, each showing any sensor. Add, remove and
+ *  reorder them in the visual editor, or in YAML (`boxes: []` hides the row):
  *
  *    boxes:
- *      - type: series          # series | episodes | songs | albums | artists | videos | movies | clients
- *                              # | disk_used | disk_free | library_size | custom
- *      - type: episodes
- *      - type: songs
- *      - type: custom          # any numeric sensor
- *        name: Playlists       # optional label
- *        entity: sensor.my_playlists
- *        attribute: count      # optional, read an attribute instead of the state
- *        tap_action: { action: none }   # optional
+ *      - entity: sensor.jellyha_series
+ *      - entity: sensor.jellyha_connected_clients
+ *        name: Active clients       # optional label (default: the sensor's name)
+ *      - entity: sensor.jellyha_library
+ *        attribute: songs           # optional: show an attribute instead of the state
+ *      - entity: sensor.jellyha_media_storage_free
+ *        tap_action: { action: none }   # optional, any standard HA action
  *
- *  Default (no `boxes`): series, episodes, active clients.
- *  disk_used / disk_free read sensor.jellyha_media_storage_free; library_size adds up every
- *  sensor.jellyha_library_*_storage_size. Songs/albums/artists/videos come from the library sensor's attributes.
- *  The older box1_type ... box4_type settings still work if you have them.
+ *  Units are shown and GB/TB-style sensors step up automatically (3500 GB -> 3.5 TB).
+ *  Boxes made with the older "type" picker (box1_type ... or type: series) keep working.
  *
  *  Tapping a box opens that sensor's pop-up. Override per box with any standard
  *  Home Assistant action (more-info, navigate, url, perform-action, none):
@@ -73,7 +69,6 @@ class JellyfinLibraryCard extends HTMLElement {
       episodes_entity: "sensor.jellyha_episodes",
       latest_entity: "sensor.jellyha_latest_movie",
       library_entity: "sensor.jellyha_library",
-      storage_entity: "sensor.jellyha_media_storage_free",
       clients_entity: "sensor.jellyha_connected_clients",
       version_entity: "sensor.jellyha_jellyfin_version",
       title: "Film Collection",
@@ -98,19 +93,21 @@ class JellyfinLibraryCard extends HTMLElement {
   static getStubConfig() {
     return {
       entity: "sensor.jellyha_movies",
-      series_entity: "sensor.jellyha_series",
-      episodes_entity: "sensor.jellyha_episodes",
-      clients_entity: "sensor.jellyha_connected_clients",
       latest_entity: "sensor.jellyha_latest_movie",
       version_entity: "sensor.jellyha_jellyfin_version",
+      boxes: [
+        { entity: "sensor.jellyha_series" },
+        { entity: "sensor.jellyha_episodes" },
+        { entity: "sensor.jellyha_connected_clients", name: "Active clients" },
+      ],
     };
   }
 
-  // Boxes: use the `boxes` list if present, otherwise the older box1_type..box4_type settings.
-  static _specsFromConfig(c) {
-    const clean = o => { const r = {}; for (const k of ["type", "name", "entity", "attribute", "tap_action"])
+  // Boxes exactly as saved (editor view): the `boxes` list, or the older box1_type..box4_type settings.
+  static _rawBoxes(c) {
+    const clean = o => { const r = {}; for (const k of ["entity", "name", "attribute", "tap_action", "type"])
       if (o[k] !== undefined && o[k] !== "" && o[k] !== null) r[k] = o[k]; return r; };
-    if (Array.isArray(c.boxes)) return c.boxes.slice(0, 4).filter(b => b && b.type && b.type !== "none").map(clean);
+    if (Array.isArray(c.boxes)) return c.boxes.slice(0, 4).filter(b => b && typeof b === "object").map(clean);
     const defaults = ["series", "episodes", "clients", "none"];
     const out = [];
     for (let n = 1; n <= 4; n++) {
@@ -118,6 +115,23 @@ class JellyfinLibraryCard extends HTMLElement {
       if (type === "none") continue;
       out.push(clean({ type, name: c[`box${n}_name`], entity: c[`box${n}_entity`],
                        attribute: c[`box${n}_attribute`], tap_action: c[`box${n}_tap_action`] }));
+    }
+    return out;
+  }
+
+  // Boxes the card actually draws. Boxes made with the old "type" picker are translated to sensors here.
+  static _specsFromConfig(c) {
+    const lib = c.library_entity || "sensor.jellyha_library";
+    const out = [];
+    for (const b of JellyfinLibraryCard._rawBoxes(c)) {
+      if (b.entity) { out.push(b); continue; }
+      const t = b.type;
+      if (!t || t === "none" || t === "custom") continue;
+      if (["songs", "albums", "artists", "videos"].includes(t)) out.push({ ...b, entity: lib, attribute: t, name: b.name || t[0].toUpperCase() + t.slice(1) });
+      else if (t === "clients") out.push({ ...b, entity: c.clients_entity || "sensor.jellyha_connected_clients", name: b.name || "Active clients" });
+      else if (t === "disk_free") out.push({ ...b, entity: "sensor.jellyha_media_storage_free", name: b.name || "Disk free" });
+      else if (t === "disk_used") out.push({ ...b, entity: "sensor.jellyha_media_storage_free", attribute: "used_tb", name: b.name || "Disk used (TB)" });
+      else if (["series", "episodes", "movies"].includes(t)) out.push(b); // resolved with library fallback in _box
     }
     return out;
   }
@@ -130,8 +144,8 @@ class JellyfinLibraryCard extends HTMLElement {
     const act = name => ({ name, selector: { ui_action: {} } });
     const labels = {
       title: "Title", subtitle: "Subtitle",
-      entity: "Film count sensor", library_entity: "Library totals sensor (fallback, also used for songs/albums)",
-      storage_entity: "Disk storage sensor (for disk used / free)", clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
+      entity: "Film count sensor", library_entity: "Library totals sensor (fallback for film count)",
+      clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
       show_extras: "Show the boxes", show_latest: "Show latest added",
       show_now_playing: "Show who's watching", show_paused: "Include paused sessions",
       players: "Limit to these media players (blank = all JellyHA players)",
@@ -148,7 +162,7 @@ class JellyfinLibraryCard extends HTMLElement {
           { name: "show_now_playing", selector: { boolean: {} } }, { name: "show_paused", selector: { boolean: {} } } ] },
         { name: "players", selector: { entity: { domain: "media_player", multiple: true } } },
         { type: "expandable", name: "", title: "Entities", expanded: false,
-          schema: [ent("entity"), ent("library_entity"), ent("storage_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")] },
+          schema: [ent("entity"), ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")] },
         { type: "expandable", name: "", title: "Other tap actions",
           schema: [act("film_tap_action"), act("latest_tap_action")] },
       ],
@@ -171,78 +185,32 @@ class JellyfinLibraryCard extends HTMLElement {
     const type = sp.type, ent = sp.entity, attr = sp.attribute;
     let id, value = null, text, st = null;
     if (ent) {
-      // any sensor: show decimals and the sensor's unit when it has them
+      // any sensor: show decimals, the sensor's unit, and step GB -> TB etc. when large
       st = this._state(ent); id = ent;
       const f = st ? parseFloat(attr ? st.attributes[attr] : st.state) : NaN;
       if (!Number.isNaN(f)) {
-        const unit = attr ? "" : st.attributes.unit_of_measurement;
-        if (unit || !Number.isInteger(f)) text = this._fmtNum(f) + (unit ? `<small>${this._esc(unit)}</small>` : "");
-        else value = f;
+        let unit = attr ? "" : st.attributes.unit_of_measurement, v = f;
+        const units = ["B", "KB", "MB", "GB", "TB", "PB"], base = this._base(st.attributes);
+        let i = units.indexOf(unit);
+        if (i >= 0) { while (v >= base && i < units.length - 1) { v /= base; i++; } unit = units[i]; v = Number(v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)); }
+        if (unit || !Number.isInteger(v)) text = this._fmtNum(v) + (unit ? `<small>${this._esc(unit)}</small>` : "");
+        else value = v;
       }
-    } else if (type === "clients") {
-      st = this._state(c.clients_entity); id = c.clients_entity;
-      if (st) value = this._num(st.state);
-    } else if (type === "disk_free" || type === "disk_used") {
-      ({ id, text } = this._disk(type));
-    } else if (type === "library_size") {
-      ({ id, text } = this._libSize());
-    } else if (type !== "custom") {
-      ({ id, value } = this._src(type));
+    } else {
+      ({ id, value } = this._src(type)); // series / episodes / movies
     }
-    const names = { movies: "Films", series: "Series", episodes: "Episodes", songs: "Songs", albums: "Albums",
-                    artists: "Artists", videos: "Videos", clients: "Active clients",
-                    disk_free: "Disk free", disk_used: "Disk used", library_size: "Library size" };
-    const label = sp.name || (type === "custom" || ent ? (st && st.attributes.friendly_name) || ent : names[type] || type);
+    const names = { movies: "Films", series: "Series", episodes: "Episodes" };
+    const clean = t => String(t || "").replace(/^(jellyha|jellyfin)\s+/i, "");
+    const label = sp.name || (ent ? clean(st && st.attributes.friendly_name) || ent : names[type] || type);
     return { n, type, id, value, text, label, action: sp.tap_action || c[`${type}_tap_action`] };
   }
 
   _fmtNum(v) { return Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
 
-  // Bytes -> "12.4 TB". Uses 1024 or 1000 steps to match the storage sensor's own numbers.
-  _fmtBytes(bytes, base) {
-    const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-    let i = 0, v = Number(bytes);
-    while (v >= base && i < units.length - 1) { v /= base; i++; }
-    const d = v >= 100 || i < 3 ? 0 : v >= 10 ? 1 : 2;
-    return `${this._fmtNum(Number(v.toFixed(d)))}<small>${units[i]}</small>`;
-  }
-
-  _storageSensor() {
-    const c = this._config;
-    const st = this._state(c.storage_entity);
-    if (st) return { id: c.storage_entity, st };
-    if (this._hass) for (const [id, s] of Object.entries(this._hass.states))
-      if (id.startsWith("sensor.") && id.includes("jellyha") && /media_storage_free$/.test(id) && s.state !== "unavailable") return { id, st: s };
-    return { id: c.storage_entity, st: null };
-  }
-
+  // 1024 or 1000 steps for byte units: total_bytes / total_tb on storage sensors tells us which
   _base(a) {
-    // total_bytes / total_tb tells us whether the integration divides by 1024 or 1000
     const r = Number(a.total_bytes) / Number(a.total_tb);
     return r > 1.05e12 ? 1024 : 1000;
-  }
-
-  _disk(type) {
-    const { id, st } = this._storageSensor();
-    if (!st) return { id };
-    const a = st.attributes;
-    const bytes = type === "disk_free" ? Number(a.free_bytes) : Number(a.used_bytes);
-    if (Number.isNaN(bytes)) return { id };
-    return { id, text: this._fmtBytes(bytes, this._base(a)) };
-  }
-
-  // Combined size of all libraries (sensor.jellyha_library_*_storage_size)
-  _libSize() {
-    if (!this._hass) return {};
-    const subs = Object.entries(this._hass.states).filter(([id, s]) =>
-      /^sensor\.jellyha_library_.*_storage_size$/.test(id) && s.state !== "unavailable" && s.state !== "unknown");
-    if (!subs.length) return { id: "sensor.jellyha_library" };
-    let total = 0;
-    for (const [, s] of subs) {
-      const b = Number(s.attributes.size_bytes);
-      total += !Number.isNaN(b) ? b : (parseFloat(s.state) || 0) * 1e9;
-    }
-    return { id: subs[0][0], text: this._fmtBytes(total, this._base(this._storageSensor().st ? this._storageSensor().st.attributes : {})) };
   }
 
   // The kind's own sensor (e.g. sensor.jellyha_series) if it exists at all, even when its state is unusable.
@@ -626,7 +594,7 @@ class JellyfinLibraryCardEditor extends HTMLElement {
 
   setConfig(config) {
     this._config = { ...config };
-    const incoming = JellyfinLibraryCard._specsFromConfig(this._config);
+    const incoming = JellyfinLibraryCard._rawBoxes(this._config);
     const changed = this._boxes === null || JSON.stringify(incoming) !== JSON.stringify(this._boxes);
     if (!this._built) this._build();
     if (changed) { this._boxes = incoming.map(b => ({ ...b })); this._renderBoxes(); }
@@ -684,9 +652,7 @@ class JellyfinLibraryCardEditor extends HTMLElement {
     });
     this.shadowRoot.getElementById("add").addEventListener("click", () => {
       if (this._boxes.length >= 4) return;
-      const order = ["series", "episodes", "songs", "albums", "artists", "videos", "clients", "movies", "disk_used", "disk_free", "library_size"];
-      const used = new Set(this._boxes.map(b => b.type));
-      this._boxes.push({ type: order.find(t => !used.has(t)) || "custom" });
+      this._boxes.push({});
       this._renderBoxes(); this._emit();
     });
   }
@@ -694,20 +660,22 @@ class JellyfinLibraryCardEditor extends HTMLElement {
   _renderBoxes() {
     const list = this.shadowRoot.getElementById("list");
     list.innerHTML = ""; this._forms = [];
-    const TYPES = [["series", "Series"], ["episodes", "Episodes"], ["songs", "Songs"], ["albums", "Albums"],
-      ["artists", "Artists"], ["videos", "Videos"], ["movies", "Films"], ["clients", "Active clients"],
-      ["disk_used", "Disk used"], ["disk_free", "Disk free"], ["library_size", "Library size"], ["custom", "Custom sensor"]];
-    const typeLabel = t => (TYPES.find(x => x[0] === t) || [, t])[1];
+    const legacy = { series: "Series", episodes: "Episodes", movies: "Films", songs: "Songs", albums: "Albums", artists: "Artists",
+      videos: "Videos", clients: "Active clients", disk_used: "Disk used", disk_free: "Disk free" };
+    const title = box => {
+      if (box.name) return box.name;
+      if (box.entity) return (this._hass && this._hass.states[box.entity] && this._hass.states[box.entity].attributes.friendly_name) || box.entity;
+      return box.type && legacy[box.type] ? `${legacy[box.type]} (built-in, pick a sensor to replace)` : "Choose a sensor";
+    };
     const schema = [
-      { name: "type", selector: { select: { mode: "dropdown", options: TYPES.map(([value, label]) => ({ value, label })) } } },
-      { type: "expandable", name: "", title: "Label, sensor and tap action", schema: [
+      { name: "entity", selector: { entity: {} } },
+      { type: "expandable", name: "", title: "Label, attribute and tap action", schema: [
         { name: "name", selector: { text: {} } },
-        { name: "entity", selector: { entity: {} } },
         { name: "attribute", selector: { text: {} } },
         { name: "tap_action", selector: { ui_action: {} } } ] },
     ];
-    const labels = { type: "What to count", name: "Label (optional)", entity: "Sensor (optional, overrides the type)",
-      attribute: "Attribute to read (optional)", tap_action: "Tap action" };
+    const labels = { entity: "Sensor", name: "Label (optional, defaults to the sensor's name)",
+      attribute: "Attribute to show instead of the state (optional)", tap_action: "Tap action (default: open the sensor)" };
 
     if (!this._boxes.length) {
       const e = document.createElement("div"); e.className = "empty"; e.textContent = "No boxes: the row is hidden.";
@@ -718,7 +686,7 @@ class JellyfinLibraryCardEditor extends HTMLElement {
       wrap.innerHTML = `<div class="hd"><span class="num">${i + 1}</span><span class="ttl"></span>
         <button class="up" title="Move up">▲</button><button class="down" title="Move down">▼</button>
         <button class="rm" title="Remove">✕</button></div>`;
-      const ttl = wrap.querySelector(".ttl"); ttl.textContent = typeLabel(box.type);
+      const ttl = wrap.querySelector(".ttl"); ttl.textContent = title(box);
       const up = wrap.querySelector(".up"), down = wrap.querySelector(".down"), rm = wrap.querySelector(".rm");
       up.disabled = i === 0; down.disabled = i === this._boxes.length - 1;
       const move = d => { const j = i + d; [this._boxes[i], this._boxes[j]] = [this._boxes[j], this._boxes[i]];
@@ -732,8 +700,8 @@ class JellyfinLibraryCardEditor extends HTMLElement {
       form.addEventListener("value-changed", e => {
         e.stopPropagation();
         const v = {}; for (const [k, val] of Object.entries(e.detail.value)) if (val !== undefined && val !== "" && val !== null) v[k] = val;
-        if (!v.type) v.type = box.type;
-        this._boxes[i] = v; ttl.textContent = typeLabel(v.type); this._emit();
+        if (v.entity) delete v.type; // picking a sensor replaces an old built-in box
+        this._boxes[i] = v; ttl.textContent = title(v); this._emit();
       });
       wrap.appendChild(form); list.appendChild(wrap); this._forms.push(form);
     });
