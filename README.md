@@ -4,7 +4,7 @@ A Home Assistant Lovelace card for the [JellyHA](https://github.com/zupancicmark
 
 ![Preview](preview.png)
 
-*Preview uses made-up titles, sample numbers and generated artwork.*
+*A real dashboard using the JellyHA integration (box 1-3 set to songs, albums and library size).*
 
 ## Features
 - Big animated film count
