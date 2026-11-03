@@ -55,6 +55,15 @@
 
 class JellyfinLibraryCard extends HTMLElement {
   setConfig(config) {
+    // Earlier editor versions saved grouped fields nested (e.g. box1: {box1_type: ...}); flatten them.
+    const flat = { ...config };
+    for (const k of ["entities", "tap_actions", "box1", "box2", "box3", "box4"]) {
+      if (flat[k] && typeof flat[k] === "object" && !Array.isArray(flat[k])) {
+        const inner = flat[k]; delete flat[k];
+        for (const [ik, iv] of Object.entries(inner)) if (!(ik in config)) flat[ik] = iv;
+      }
+    }
+    config = flat;
     this._config = {
       entity: "sensor.jellyha_movies",
       series_entity: "sensor.jellyha_series",
@@ -138,11 +147,11 @@ class JellyfinLibraryCard extends HTMLElement {
         },
         { name: "players", selector: { entity: { domain: "media_player", multiple: true } } },
         {
-          type: "expandable", name: "entities", title: "Entities", expanded: false,
+          type: "expandable", name: "", title: "Entities", expanded: false,
           schema: [ent("entity"), ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")],
         },
         ...[1, 2, 3, 4].map(n => ({
-          type: "expandable", name: `box${n}`, title: `Box ${n}`, expanded: n === 1,
+          type: "expandable", name: "", title: `Box ${n}`, expanded: n === 1,
           schema: [
             { name: `box${n}_type`, selector: { select: { mode: "dropdown", options: [
               { value: "none", label: "Hidden" }, { value: "series", label: "Series" }, { value: "episodes", label: "Episodes" },
@@ -156,7 +165,7 @@ class JellyfinLibraryCard extends HTMLElement {
           ],
         })),
         {
-          type: "expandable", name: "tap_actions", title: "Other tap actions",
+          type: "expandable", name: "", title: "Other tap actions",
           schema: [act("film_tap_action"), act("latest_tap_action")],
         },
       ],
@@ -263,9 +272,11 @@ class JellyfinLibraryCard extends HTMLElement {
         .chip span { font-size: .58rem; opacity: .65; text-transform: uppercase; letter-spacing: .6px; white-space: nowrap; }
         .latest { position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; margin-top: 14px;
           padding: 12px; min-height: 72px; border-radius: 14px; background: rgba(0,0,0,.25) center/cover no-repeat;
-          border: 1px solid rgba(255,255,255,.1); }
+          border: 0; }
         .latest::before { content: ""; position: absolute; inset: 0;
-          background: linear-gradient(90deg, rgba(14,16,32,.92) 0%, rgba(14,16,32,.65) 55%, rgba(14,16,32,.25) 100%); }
+          background: linear-gradient(90deg, rgba(14,16,32,.94) 0%, rgba(14,16,32,.72) 55%, rgba(14,16,32,.5) 100%); }
+        .latest::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+          border: 1px solid rgba(255,255,255,.12); }
         .latest > * { position: relative; }
         .latest img { width: 44px; height: 66px; box-shadow: 0 4px 12px rgba(0,0,0,.5); object-fit: cover; border-radius: 6px; flex: none; background: rgba(255,255,255,.08); }
         .latest .lbl { font-size: .6rem; opacity: .6; text-transform: uppercase; letter-spacing: 1.2px; }
@@ -293,7 +304,7 @@ class JellyfinLibraryCard extends HTMLElement {
         .row.tap:hover { background: rgba(255,255,255,.14); }
         .chip.tap:hover { background: rgba(255,255,255,.16); transform: translateY(-1px); }
         .chip.tap:active, .latest.tap:active { transform: scale(.98); }
-        .latest.tap:hover { border-color: rgba(255,255,255,.3); }
+        .latest.tap:hover::after { border-color: rgba(255,255,255,.3); }
         .num.tap:hover { opacity: .85; }
         [hidden] { display: none !important; }
       </style>
