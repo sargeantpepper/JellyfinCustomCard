@@ -28,26 +28,27 @@
  *    show_paused: true          # include paused sessions
  *    players: [media_player.jellyha_admin]   # optional; default = all media_player.jellyha_* players
  *
- *  BOXES - up to four boxes under the film count (box1 ... box4). Each has:
- *    boxN_type:      none | series | episodes | songs | albums | artists | videos | movies | clients | custom
- *    boxN_name:      optional label
- *    boxN_entity:    optional sensor; overrides the type (any numeric sensor)
- *    boxN_attribute: optional attribute to read instead of the sensor's state
- *    boxN_tap_action: optional, any standard HA action
- *  Defaults: box1 = series, box2 = episodes, box3 = clients, box4 = hidden.
- *  Songs/albums/artists/videos come from the library sensor's attributes. Example:
+ *  BOXES - up to four boxes under the film count. Add, remove and reorder them in the visual
+ *  editor, or in YAML (remove the list, or use `boxes: []`, to hide the row):
  *
- *    box1_type: series
- *    box2_type: episodes
- *    box3_type: songs
- *    box4_type: albums
+ *    boxes:
+ *      - type: series          # series | episodes | songs | albums | artists | videos | movies | clients | custom
+ *      - type: episodes
+ *      - type: songs
+ *      - type: custom          # any numeric sensor
+ *        name: Playlists       # optional label
+ *        entity: sensor.my_playlists
+ *        attribute: count      # optional, read an attribute instead of the state
+ *        tap_action: { action: none }   # optional
+ *
+ *  Default (no `boxes`): series, episodes, active clients.
+ *  Songs/albums/artists/videos come from the library sensor's attributes.
+ *  The older box1_type ... box4_type settings still work if you have them.
  *
  *  Tapping a box opens that sensor's pop-up. Override per box with any standard
  *  Home Assistant action (more-info, navigate, url, perform-action, none):
  *
  *    film_tap_action:    { action: more-info, entity: sensor.jellyha_unwatched_movies }
- *    box1_tap_action:    { action: navigate, navigation_path: /lovelace/series }
- *    box3_tap_action:    { action: none }
  *    latest_tap_action:  { action: url, url_path: http://jellyfin.local:8096 }
  *
  *    show_extras: true
@@ -78,10 +79,6 @@ class JellyfinLibraryCard extends HTMLElement {
       show_now_playing: true,
       show_paused: true,
       show_extras: true,
-      box1_type: "series",
-      box2_type: "episodes",
-      box3_type: "clients",
-      box4_type: "none",
       ...config,
     };
     this._shown = {};
@@ -106,8 +103,26 @@ class JellyfinLibraryCard extends HTMLElement {
     };
   }
 
-  // Visual editor (Home Assistant renders this schema as a form)
-  static getConfigForm() {
+  // Boxes: use the `boxes` list if present, otherwise the older box1_type..box4_type settings.
+  static _specsFromConfig(c) {
+    const clean = o => { const r = {}; for (const k of ["type", "name", "entity", "attribute", "tap_action"])
+      if (o[k] !== undefined && o[k] !== "" && o[k] !== null) r[k] = o[k]; return r; };
+    if (Array.isArray(c.boxes)) return c.boxes.slice(0, 4).filter(b => b && b.type && b.type !== "none").map(clean);
+    const defaults = ["series", "episodes", "clients", "none"];
+    const out = [];
+    for (let n = 1; n <= 4; n++) {
+      const type = c[`box${n}_type`] ?? defaults[n - 1];
+      if (type === "none") continue;
+      out.push(clean({ type, name: c[`box${n}_name`], entity: c[`box${n}_entity`],
+                       attribute: c[`box${n}_attribute`], tap_action: c[`box${n}_tap_action`] }));
+    }
+    return out;
+  }
+
+  static getConfigElement() { return document.createElement("jellyfin-library-card-editor"); }
+
+  // Schema for the general (non-box) options, rendered by Home Assistant's form in the editor.
+  static _generalSchema() {
     const ent = name => ({ name, selector: { entity: { domain: "sensor" } } });
     const act = name => ({ name, selector: { ui_action: {} } });
     const labels = {
@@ -118,58 +133,22 @@ class JellyfinLibraryCard extends HTMLElement {
       show_now_playing: "Show who's watching", show_paused: "Include paused sessions",
       players: "Limit to these media players (blank = all JellyHA players)",
       film_tap_action: "Film count tap action", latest_tap_action: "Latest added tap action",
-      tap_actions: "Other tap actions", entities: "Entities",
     };
-    [1, 2, 3, 4].forEach(n => Object.assign(labels, {
-      [`box${n}_type`]: "What to count", [`box${n}_name`]: "Label (optional)",
-      [`box${n}_entity`]: "Sensor (optional, overrides the type)", [`box${n}_attribute`]: "Attribute to read (optional)",
-      [`box${n}_tap_action`]: "Tap action",
-    }));
     return {
+      labels,
       schema: [
-        {
-          type: "grid", name: "", schema: [
-            { name: "title", selector: { text: {} } },
-            { name: "subtitle", selector: { text: {} } },
-          ],
-        },
-        {
-          type: "grid", name: "", schema: [
-            { name: "show_extras", selector: { boolean: {} } },
-            { name: "show_latest", selector: { boolean: {} } },
-          ],
-        },
-        {
-          type: "grid", name: "", schema: [
-            { name: "show_now_playing", selector: { boolean: {} } },
-            { name: "show_paused", selector: { boolean: {} } },
-          ],
-        },
+        { type: "grid", name: "", schema: [
+          { name: "title", selector: { text: {} } }, { name: "subtitle", selector: { text: {} } } ] },
+        { type: "grid", name: "", schema: [
+          { name: "show_extras", selector: { boolean: {} } }, { name: "show_latest", selector: { boolean: {} } } ] },
+        { type: "grid", name: "", schema: [
+          { name: "show_now_playing", selector: { boolean: {} } }, { name: "show_paused", selector: { boolean: {} } } ] },
         { name: "players", selector: { entity: { domain: "media_player", multiple: true } } },
-        {
-          type: "expandable", name: "", title: "Entities", expanded: false,
-          schema: [ent("entity"), ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")],
-        },
-        ...[1, 2, 3, 4].map(n => ({
-          type: "expandable", name: "", title: `Box ${n}`, expanded: n === 1,
-          schema: [
-            { name: `box${n}_type`, selector: { select: { mode: "dropdown", options: [
-              { value: "none", label: "Hidden" }, { value: "series", label: "Series" }, { value: "episodes", label: "Episodes" },
-              { value: "songs", label: "Songs" }, { value: "albums", label: "Albums" }, { value: "artists", label: "Artists" },
-              { value: "videos", label: "Videos" }, { value: "movies", label: "Films" },
-              { value: "clients", label: "Active clients" }, { value: "custom", label: "Custom sensor" } ] } } },
-            { name: `box${n}_name`, selector: { text: {} } },
-            { name: `box${n}_entity`, selector: { entity: {} } },
-            { name: `box${n}_attribute`, selector: { text: {} } },
-            { name: `box${n}_tap_action`, selector: { ui_action: {} } },
-          ],
-        })),
-        {
-          type: "expandable", name: "", title: "Other tap actions",
-          schema: [act("film_tap_action"), act("latest_tap_action")],
-        },
+        { type: "expandable", name: "", title: "Entities", expanded: false,
+          schema: [ent("entity"), ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")] },
+        { type: "expandable", name: "", title: "Other tap actions",
+          schema: [act("film_tap_action"), act("latest_tap_action")] },
       ],
-      computeLabel: schema => labels[schema.name] || schema.name,
     };
   }
 
@@ -184,9 +163,9 @@ class JellyfinLibraryCard extends HTMLElement {
 
   // Resolves one of the four configurable boxes (box1..box4).
   _box(n) {
-    const c = this._config, type = c[`box${n}_type`] || "none";
-    if (type === "none") return null;
-    const ent = c[`box${n}_entity`], attr = c[`box${n}_attribute`];
+    const c = this._config, sp = JellyfinLibraryCard._specsFromConfig(c)[n - 1];
+    if (!sp) return null;
+    const type = sp.type, ent = sp.entity, attr = sp.attribute;
     let id, value = null, st = null;
     if (ent) {
       st = this._state(ent); id = ent;
@@ -199,8 +178,8 @@ class JellyfinLibraryCard extends HTMLElement {
     }
     const names = { movies: "Films", series: "Series", episodes: "Episodes", songs: "Songs", albums: "Albums",
                     artists: "Artists", videos: "Videos", clients: "Active clients" };
-    const label = c[`box${n}_name`] || (type === "custom" || ent ? (st && st.attributes.friendly_name) || ent : names[type] || type);
-    return { n, type, id, value, label, action: c[`box${n}_tap_action`] || c[`${type}_tap_action`] };
+    const label = sp.name || (type === "custom" || ent ? (st && st.attributes.friendly_name) || ent : names[type] || type);
+    return { n, type, id, value, label, action: sp.tap_action || c[`${type}_tap_action`] };
   }
 
   // Finds a library count: configured sensor -> JellyHA library totals sensor -> any matching jellyha sensor.
@@ -292,7 +271,11 @@ class JellyfinLibraryCard extends HTMLElement {
         .row { display: flex; align-items: center; gap: 12px; padding: 8px; margin-bottom: 8px; border-radius: 14px;
           background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1); position: relative; overflow: hidden; }
         .row:last-child { margin-bottom: 0; }
-        .row img { width: 38px; height: 56px; object-fit: cover; border-radius: 6px; flex: none; background: rgba(255,255,255,.08); }
+        .row .art { width: 38px; height: 56px; flex: none; border-radius: 6px; overflow: hidden; background: rgba(255,255,255,.08);
+          display: grid; place-items: center; }
+        .row .art.ph ha-icon { --mdc-icon-size: 22px; opacity: .5; }
+        .row .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .row img.unused { width: 38px; height: 56px; object-fit: cover; border-radius: 6px; flex: none; background: rgba(255,255,255,.08); }
         .row .info { flex: 1; min-width: 0; }
         .row .t { font-weight: 600; font-size: .92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .row .s, .row .who { font-size: .72rem; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -392,6 +375,7 @@ class JellyfinLibraryCard extends HTMLElement {
     // Tiles
     const tiles = [1, 2, 3, 4].map(n => this._box(n)).filter(t => t && t.value !== null && t.value !== undefined);
     const extras = r.getElementById("extras");
+    extras.hidden = !c.show_extras || !tiles.length;
     const sig = tiles.map(t => `${t.n}:${t.label}`).join("|");
     if (extras.dataset.sig !== sig) {
       extras.dataset.sig = sig;
@@ -439,6 +423,25 @@ class JellyfinLibraryCard extends HTMLElement {
     return out;
   }
 
+  // Try each candidate artwork URL in turn (HA's proxied entity_picture first); fall back to an icon.
+  _loadArt(el) {
+    let srcs = [];
+    try { srcs = JSON.parse(el.dataset.srcs || "[]"); } catch (e) { /* ignore */ }
+    const fallback = () => { el.innerHTML = '<ha-icon icon="mdi:movie-open"></ha-icon>'; el.classList.add("ph"); };
+    const next = () => {
+      const src = srcs.shift();
+      if (!src) return fallback();
+      const img = new Image();
+      img.alt = "";
+      let done = false;
+      const timer = setTimeout(() => { if (!done) { done = true; img.src = ""; next(); } }, 3500); // unreachable host
+      img.onload = () => { if (done) return; done = true; clearTimeout(timer); el.innerHTML = ""; el.appendChild(img); };
+      img.onerror = () => { if (done) return; done = true; clearTimeout(timer); next(); };
+      img.src = src;
+    };
+    next();
+  }
+
   _updateNowPlaying() {
     const box = this.shadowRoot.getElementById("nowp");
     const list = this._config.show_now_playing ? this._activeSessions() : [];
@@ -455,11 +458,12 @@ class JellyfinLibraryCard extends HTMLElement {
           : [a.year, a.official_rating].filter(Boolean).join(" · ");
         const who = [a.user_name, a.device_name].filter(Boolean).join(" on ");
         return `<div class="row tap" data-key="player:${this._esc(id)}">
-          ${a.media_image_url ? `<img src="${this._esc(a.media_image_url)}" alt="" onerror="this.hidden=true">` : ""}
+          <div class="art" data-srcs="${this._esc(JSON.stringify([a.entity_picture, a.media_image_url, a.entity_picture_local, a.poster_url].filter(Boolean)))}"></div>
           <div class="info"><div class="t">${this._esc(title)}</div>${sub ? `<div class="s">${this._esc(sub)}</div>` : ""}
             <div class="who">${this._esc(who)}</div><div class="bar"><i data-id="${this._esc(id)}"></i></div></div>
           <ha-icon class="st" icon="${state === "paused" ? "mdi:pause-circle-outline" : "mdi:play-circle-outline"}"></ha-icon></div>`;
       }).join("");
+      box.querySelectorAll(".art").forEach(el => this._loadArt(el));
     }
     list.forEach(({ id, a }) => {
       const bar = box.querySelector(`i[data-id="${CSS.escape(id)}"]`);
@@ -487,6 +491,129 @@ class JellyfinLibraryCard extends HTMLElement {
     return String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   }
 }
+
+/* ------------------------------ Visual editor ------------------------------ */
+class JellyfinLibraryCardEditor extends HTMLElement {
+  constructor() { super(); this.attachShadow({ mode: "open" }); this._boxes = null; this._forms = []; }
+
+  set hass(h) { this._hass = h; if (this._gen) this._gen.hass = h; this._forms.forEach(f => (f.hass = h)); }
+
+  setConfig(config) {
+    this._config = { ...config };
+    const incoming = JellyfinLibraryCard._specsFromConfig(this._config);
+    const changed = this._boxes === null || JSON.stringify(incoming) !== JSON.stringify(this._boxes);
+    if (!this._built) this._build();
+    if (changed) { this._boxes = incoming.map(b => ({ ...b })); this._renderBoxes(); }
+    this._gen.data = this._generalData();
+  }
+
+  _generalData() {
+    const d = { ...this._config }; delete d.boxes;
+    for (const k of Object.keys(d)) if (/^box[1-4]($|_)/.test(k) || k === "entities" || k === "tap_actions") delete d[k];
+    return d;
+  }
+
+  _emit(general) {
+    const config = { ...(general || this._generalData()), boxes: this._boxes.map(b => ({ ...b })) };
+    this._config = config;
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
+  }
+
+  _build() {
+    this._built = true;
+    const { schema, labels } = JellyfinLibraryCard._generalSchema();
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: block; }
+        h3 { margin: 18px 0 4px; font-size: 1rem; font-weight: 500; color: var(--primary-text-color); }
+        .hint { font-size: .8rem; color: var(--secondary-text-color); margin: 0 0 10px; }
+        .box { border: 1px solid var(--divider-color); border-radius: 12px; padding: 4px 12px 10px; margin-bottom: 10px;
+          background: var(--card-background-color, transparent); }
+        .hd { display: flex; align-items: center; gap: 4px; padding: 6px 0; }
+        .num { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: .8rem;
+          background: var(--primary-color); color: var(--text-primary-color, #fff); }
+        .ttl { flex: 1; margin-left: 8px; font-weight: 500; color: var(--primary-text-color); }
+        button { cursor: pointer; border: 0; background: transparent; color: var(--primary-text-color); width: 34px; height: 34px;
+          border-radius: 50%; font-size: 1.05rem; line-height: 1; }
+        button:hover:not(:disabled) { background: var(--secondary-background-color); }
+        button:disabled { opacity: .3; cursor: default; }
+        button.rm:hover:not(:disabled) { color: var(--error-color, #db4437); }
+        .add { width: 100%; height: 40px; border-radius: 10px; border: 1px dashed var(--primary-color);
+          color: var(--primary-color); font-size: .95rem; }
+        .empty { padding: 14px; text-align: center; color: var(--secondary-text-color); border: 1px dashed var(--divider-color);
+          border-radius: 12px; margin-bottom: 10px; font-size: .9rem; }
+      </style>
+      <ha-form id="gen"></ha-form>
+      <h3>Boxes</h3>
+      <p class="hint">Up to 4 boxes under the film count. Remove them all to hide the row.</p>
+      <div id="list"></div>
+      <button class="add" id="add">+ Add box</button>`;
+    this._gen = this.shadowRoot.getElementById("gen");
+    this._gen.schema = schema;
+    this._gen.computeLabel = s => labels[s.name] || s.name;
+    if (this._hass) this._gen.hass = this._hass;
+    this._gen.addEventListener("value-changed", e => {
+      e.stopPropagation();
+      if (this._boxes) this._emit({ ...e.detail.value });
+    });
+    this.shadowRoot.getElementById("add").addEventListener("click", () => {
+      if (this._boxes.length >= 4) return;
+      const order = ["series", "episodes", "songs", "albums", "artists", "videos", "clients", "movies"];
+      const used = new Set(this._boxes.map(b => b.type));
+      this._boxes.push({ type: order.find(t => !used.has(t)) || "custom" });
+      this._renderBoxes(); this._emit();
+    });
+  }
+
+  _renderBoxes() {
+    const list = this.shadowRoot.getElementById("list");
+    list.innerHTML = ""; this._forms = [];
+    const TYPES = [["series", "Series"], ["episodes", "Episodes"], ["songs", "Songs"], ["albums", "Albums"],
+      ["artists", "Artists"], ["videos", "Videos"], ["movies", "Films"], ["clients", "Active clients"], ["custom", "Custom sensor"]];
+    const typeLabel = t => (TYPES.find(x => x[0] === t) || [, t])[1];
+    const schema = [
+      { name: "type", selector: { select: { mode: "dropdown", options: TYPES.map(([value, label]) => ({ value, label })) } } },
+      { type: "expandable", name: "", title: "Label, sensor and tap action", schema: [
+        { name: "name", selector: { text: {} } },
+        { name: "entity", selector: { entity: {} } },
+        { name: "attribute", selector: { text: {} } },
+        { name: "tap_action", selector: { ui_action: {} } } ] },
+    ];
+    const labels = { type: "What to count", name: "Label (optional)", entity: "Sensor (optional, overrides the type)",
+      attribute: "Attribute to read (optional)", tap_action: "Tap action" };
+
+    if (!this._boxes.length) {
+      const e = document.createElement("div"); e.className = "empty"; e.textContent = "No boxes: the row is hidden.";
+      list.appendChild(e);
+    }
+    this._boxes.forEach((box, i) => {
+      const wrap = document.createElement("div"); wrap.className = "box";
+      wrap.innerHTML = `<div class="hd"><span class="num">${i + 1}</span><span class="ttl"></span>
+        <button class="up" title="Move up">▲</button><button class="down" title="Move down">▼</button>
+        <button class="rm" title="Remove">✕</button></div>`;
+      const ttl = wrap.querySelector(".ttl"); ttl.textContent = typeLabel(box.type);
+      const up = wrap.querySelector(".up"), down = wrap.querySelector(".down"), rm = wrap.querySelector(".rm");
+      up.disabled = i === 0; down.disabled = i === this._boxes.length - 1;
+      const move = d => { const j = i + d; [this._boxes[i], this._boxes[j]] = [this._boxes[j], this._boxes[i]];
+        this._renderBoxes(); this._emit(); };
+      up.addEventListener("click", () => move(-1));
+      down.addEventListener("click", () => move(1));
+      rm.addEventListener("click", () => { this._boxes.splice(i, 1); this._renderBoxes(); this._emit(); });
+      const form = document.createElement("ha-form");
+      form.schema = schema; form.data = { ...box }; form.computeLabel = s => labels[s.name] || s.name;
+      if (this._hass) form.hass = this._hass;
+      form.addEventListener("value-changed", e => {
+        e.stopPropagation();
+        const v = {}; for (const [k, val] of Object.entries(e.detail.value)) if (val !== undefined && val !== "" && val !== null) v[k] = val;
+        if (!v.type) v.type = box.type;
+        this._boxes[i] = v; ttl.textContent = typeLabel(v.type); this._emit();
+      });
+      wrap.appendChild(form); list.appendChild(wrap); this._forms.push(form);
+    });
+    this.shadowRoot.getElementById("add").hidden = this._boxes.length >= 4;
+  }
+}
+customElements.define("jellyfin-library-card-editor", JellyfinLibraryCardEditor);
 
 customElements.define("jellyfin-library-card", JellyfinLibraryCard);
 window.customCards = window.customCards || [];

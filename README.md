@@ -32,22 +32,27 @@ All entities default to JellyHA's names, so no config is needed.
 | `version_entity` | `sensor.jellyha_jellyfin_version` | Jellyfin version |
 | `title` / `subtitle` | `Film Collection` / `Jellyfin` | Header text |
 | `show_extras` | `true` | Show the boxes |
-| `box1_type` ... `box4_type` | `series`, `episodes`, `clients`, `none` | `none`, `series`, `episodes`, `songs`, `albums`, `artists`, `videos`, `movies`, `clients`, `custom` |
-| `boxN_name` | | Custom label |
-| `boxN_entity` | | Any numeric sensor; overrides the type |
-| `boxN_attribute` | | Read this attribute instead of the state |
-| `boxN_tap_action` | `more-info` | Tap action for the box |
+| `boxes` | series, episodes, clients | List of up to 4 boxes. `[]` hides the row. See below |
 | `show_latest` | `true` | Latest added section |
 | `show_now_playing` | `true` | Now watching list |
 | `show_paused` | `true` | Include paused sessions |
 | `players` | all `media_player.jellyha_*` | Limit Now watching to these players |
 | `film_tap_action`, `latest_tap_action` | `more-info` | Tap actions for the film count and latest added |
 
-## Example: count songs and albums too
+## Boxes
+Add, remove and reorder up to four boxes under the film count in the visual editor, or in YAML:
+
 ```yaml
 type: custom:jellyfin-library-card
-box1_type: series
-box2_type: episodes
-box3_type: songs
-box4_type: albums
+boxes:
+  - type: series        # series | episodes | songs | albums | artists | videos | movies | clients | custom
+  - type: episodes
+  - type: songs
+  - type: custom        # any numeric sensor
+    name: Playlists     # optional label
+    entity: sensor.my_playlists
+    attribute: count    # optional: read an attribute instead of the state
+    tap_action:         # optional
+      action: none
 ```
+With no `boxes`, you get series, episodes and active clients. `boxes: []` hides the row. The older `box1_type` ... `box4_type` settings still work.
