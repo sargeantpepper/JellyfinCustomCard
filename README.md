@@ -29,6 +29,7 @@ All entities default to JellyHA's names, so no config is needed.
 | `series_entity` | `sensor.jellyha_series` | Series count |
 | `episodes_entity` | `sensor.jellyha_episodes` | Episode count |
 | `clients_entity` | `sensor.jellyha_connected_clients` | Active clients |
+| `library_entity` | `sensor.jellyha_library` | Fallback: uses its movies/series/episodes attributes if a count sensor is missing |
 | `latest_entity` | `sensor.jellyha_latest_movie` | Latest film |
 | `version_entity` | `sensor.jellyha_jellyfin_version` | Jellyfin version |
 | `title` / `subtitle` | `Film Collection` / `Jellyfin` | Header text |

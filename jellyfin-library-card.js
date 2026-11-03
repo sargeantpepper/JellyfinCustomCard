@@ -18,6 +18,7 @@
  *    series_entity: sensor.jellyha_series
  *    episodes_entity: sensor.jellyha_episodes
  *    latest_entity: sensor.jellyha_latest_movie
+ *    library_entity: sensor.jellyha_library    # fallback: uses its movies/series/episodes attributes
  *    clients_entity: sensor.jellyha_connected_clients
  *    version_entity: sensor.jellyha_jellyfin_version
  *    title: Film Collection
@@ -46,6 +47,7 @@ class JellyfinLibraryCard extends HTMLElement {
       series_entity: "sensor.jellyha_series",
       episodes_entity: "sensor.jellyha_episodes",
       latest_entity: "sensor.jellyha_latest_movie",
+      library_entity: "sensor.jellyha_library",
       clients_entity: "sensor.jellyha_connected_clients",
       version_entity: "sensor.jellyha_jellyfin_version",
       title: "Film Collection",
@@ -85,7 +87,7 @@ class JellyfinLibraryCard extends HTMLElement {
     const labels = {
       title: "Title", subtitle: "Subtitle",
       entity: "Film count sensor", series_entity: "Series sensor", episodes_entity: "Episodes sensor",
-      clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
+      library_entity: "Library totals sensor (fallback)", clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
       show_extras: "Show series / episodes / clients boxes", show_latest: "Show latest added",
       film_tap_action: "Film count tap action", series_tap_action: "Series tap action",
       episodes_tap_action: "Episodes tap action", clients_tap_action: "Clients tap action",
@@ -118,7 +120,7 @@ class JellyfinLibraryCard extends HTMLElement {
         {
           type: "expandable", name: "entities", title: "Entities", expanded: true,
           schema: [ent("entity"), ent("series_entity"), ent("episodes_entity"),
-                   ent("clients_entity"), ent("latest_entity"), ent("version_entity")],
+                   ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")],
         },
         {
           type: "expandable", name: "tap_actions", title: "Tap actions",
@@ -137,6 +139,24 @@ class JellyfinLibraryCard extends HTMLElement {
   _num(v) {
     const n = parseInt(v, 10);
     return Number.isNaN(n) ? null : n;
+  }
+
+  // Finds a library count: configured sensor -> JellyHA library totals sensor -> any matching jellyha sensor.
+  _src(kind) {
+    const c = this._config;
+    const cfg = { movies: c.entity, series: c.series_entity, episodes: c.episodes_entity }[kind];
+    const direct = this._state(cfg);
+    if (direct && this._num(direct.state) !== null) return { id: cfg, value: this._num(direct.state) };
+    const lib = this._state(c.library_entity);
+    if (lib && this._num(lib.attributes[kind]) !== null) return { id: c.library_entity, value: this._num(lib.attributes[kind]) };
+    if (this._hass) {
+      const bad = /unwatched|watched|favorite|latest|percentage|total/;
+      for (const [id, st] of Object.entries(this._hass.states)) {
+        if (id.startsWith("sensor.") && id.includes("jellyha") && id.endsWith("_" + kind) && !bad.test(id)
+            && this._num(st.state) !== null) return { id, value: this._num(st.state) };
+      }
+    }
+    return { id: cfg, value: null };
   }
 
   _render() {
@@ -170,7 +190,7 @@ class JellyfinLibraryCard extends HTMLElement {
         .count { font-size: 3.6rem; line-height: 1; font-weight: 800; font-variant-numeric: tabular-nums;
           background: linear-gradient(90deg, #fff, #bfe9ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
         .unit { font-size: 1rem; opacity: .75; }
-        .na { opacity: .6; font-size: 1rem; }
+        .na { opacity: .6; font-size: 1rem; -webkit-text-fill-color: #fff; font-weight: 500; }
         .extras { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
         .chip { padding: 9px 10px; border-radius: 14px; background: rgba(255,255,255,.09);
           backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.12); min-width: 0; }
@@ -241,9 +261,9 @@ class JellyfinLibraryCard extends HTMLElement {
   _handleTap(key) {
     const c = this._config;
     const map = {
-      films: [c.entity, c.film_tap_action],
-      series: [c.series_entity, c.series_tap_action],
-      episodes: [c.episodes_entity, c.episodes_tap_action],
+      films: [this._src("movies").id || c.entity, c.film_tap_action],
+      series: [this._src("series").id || c.series_entity, c.series_tap_action],
+      episodes: [this._src("episodes").id || c.episodes_entity, c.episodes_tap_action],
       clients: [c.clients_entity, c.clients_tap_action],
       latest: [c.latest_entity, c.latest_tap_action],
     };
@@ -278,15 +298,18 @@ class JellyfinLibraryCard extends HTMLElement {
     if (ver) verEl.textContent = "v" + String(ver.state).replace(/^v/i, "");
 
     // Film count
-    const films = this._state(c.entity);
-    const total = films ? this._num(films.state) : null;
-    if (total === null) main.innerHTML = '<span class="na">unavailable</span>';
+    const total = this._src("movies").value;
+    if (total === null) {
+      if (this._anim) this._anim.main = null;
+      this._shown.main = undefined;
+      main.innerHTML = `<span class="na">unavailable</span>`;
+    }
     else this._animate("main", main, total);
 
     // Tiles
     const tiles = [
-      ["series", "Series", this._state(c.series_entity) && this._num(this._state(c.series_entity).state)],
-      ["episodes", "Episodes", this._state(c.episodes_entity) && this._num(this._state(c.episodes_entity).state)],
+      ["series", "Series", this._src("series").value],
+      ["episodes", "Episodes", this._src("episodes").value],
       ["clients", "Active clients", this._state(c.clients_entity) && this._num(this._state(c.clients_entity).state)],
     ].filter(t => t[2] !== null && t[2] !== undefined);
     const extras = r.getElementById("extras");
@@ -369,8 +392,10 @@ class JellyfinLibraryCard extends HTMLElement {
     if (!el || this._shown[key] === target) return;
     const start = this._shown[key] ?? 0;
     this._shown[key] = target;
+    const token = (this._anim = this._anim || {})[key] = Symbol();
     const dur = 1200, t0 = performance.now();
     const tick = now => {
+      if (this._anim[key] !== token) return; // superseded or cancelled
       const p = Math.min((now - t0) / dur, 1);
       el.textContent = Math.round(start + (target - start) * (1 - Math.pow(1 - p, 3))).toLocaleString();
       if (p < 1) requestAnimationFrame(tick);
