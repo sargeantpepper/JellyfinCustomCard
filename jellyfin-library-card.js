@@ -34,7 +34,7 @@
  *    boxes:
  *      - entity: sensor.jellyha_series
  *      - entity: sensor.jellyha_connected_clients
- *        name: Active clients       # optional label (default: the sensor's name)
+ *        name: Clients              # optional label (default: the sensor's name)
  *      - entity: sensor.jellyha_library
  *        attribute: songs           # optional: show an attribute instead of the state
  *      - entity: sensor.jellyha_media_storage_free
@@ -98,7 +98,7 @@ class JellyfinLibraryCard extends HTMLElement {
       boxes: [
         { entity: "sensor.jellyha_series" },
         { entity: "sensor.jellyha_episodes" },
-        { entity: "sensor.jellyha_connected_clients", name: "Active clients" },
+        { entity: "sensor.jellyha_connected_clients", name: "Clients" },
       ],
     };
   }
@@ -128,7 +128,7 @@ class JellyfinLibraryCard extends HTMLElement {
       const t = b.type;
       if (!t || t === "none" || t === "custom") continue;
       if (["songs", "albums", "artists", "videos"].includes(t)) out.push({ ...b, entity: lib, attribute: t, name: b.name || t[0].toUpperCase() + t.slice(1) });
-      else if (t === "clients") out.push({ ...b, entity: c.clients_entity || "sensor.jellyha_connected_clients", name: b.name || "Active clients" });
+      else if (t === "clients") out.push({ ...b, entity: c.clients_entity || "sensor.jellyha_connected_clients", name: b.name || "Clients" });
       else if (t === "disk_free") out.push({ ...b, entity: "sensor.jellyha_media_storage_free", name: b.name || "Disk free" });
       else if (t === "disk_used") out.push({ ...b, entity: "sensor.jellyha_media_storage_free", attribute: "used_tb", name: b.name || "Disk used (TB)" });
       else if (["series", "episodes", "movies"].includes(t)) out.push(b); // resolved with library fallback in _box
@@ -711,9 +711,14 @@ class JellyfinLibraryCardEditor extends HTMLElement {
 customElements.define("jellyfin-library-card-editor", JellyfinLibraryCardEditor);
 
 customElements.define("jellyfin-library-card", JellyfinLibraryCard);
+// Registers the card in Home Assistant's "Add card" picker (shown under Custom cards).
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "jellyfin-library-card",
-  name: "Jellyfin Library Card",
-  description: "Film count, library tiles and latest addition with backdrop art for the JellyHA integration.",
-});
+if (!window.customCards.some(c => c.type === "jellyfin-library-card")) {
+  window.customCards.push({
+    type: "jellyfin-library-card",
+    name: "Jellyfin Library Card",
+    description: "Film count, your own sensor boxes, who's watching and the latest film added. Built for the JellyHA integration.",
+    preview: true, // live preview in the picker (uses getStubConfig)
+    documentationURL: "https://github.com/sargeantpepper/JellyfinCustomCard",
+  });
+}

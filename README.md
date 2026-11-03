@@ -4,7 +4,7 @@ A Home Assistant Lovelace card for the [JellyHA](https://github.com/zupancicmark
 
 ![Preview](preview.png)
 
-*Preview uses sample data and stand-in artwork.*
+*Preview uses made-up titles, sample numbers and generated artwork.*
 
 ## Features
 - Big animated film count
@@ -21,6 +21,9 @@ A Home Assistant Lovelace card for the [JellyHA](https://github.com/zupancicmark
 3. Add the card: `type: custom:jellyfin-library-card`
 
 All entities default to JellyHA's names, so no config is needed.
+
+## Card picker
+Once the resource is loaded, the card appears in Home Assistant's **Add card** dialog under *Custom cards* as **Jellyfin Library Card**, with a live preview. If it isn't listed, hard-refresh the browser (Ctrl+Shift+R) or clear the app cache, and check the resource is added as a *JavaScript module*.
 
 ## Options
 | Option | Default | Description |
