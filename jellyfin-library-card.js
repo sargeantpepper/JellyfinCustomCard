@@ -28,13 +28,26 @@
  *    show_paused: true          # include paused sessions
  *    players: [media_player.jellyha_admin]   # optional; default = all media_player.jellyha_* players
  *
+ *  BOXES - up to four boxes under the film count (box1 ... box4). Each has:
+ *    boxN_type:      none | series | episodes | songs | albums | artists | videos | movies | clients | custom
+ *    boxN_name:      optional label
+ *    boxN_entity:    optional sensor; overrides the type (any numeric sensor)
+ *    boxN_attribute: optional attribute to read instead of the sensor's state
+ *    boxN_tap_action: optional, any standard HA action
+ *  Defaults: box1 = series, box2 = episodes, box3 = clients, box4 = hidden.
+ *  Songs/albums/artists/videos come from the library sensor's attributes. Example:
+ *
+ *    box1_type: series
+ *    box2_type: episodes
+ *    box3_type: songs
+ *    box4_type: albums
+ *
  *  Tapping a box opens that sensor's pop-up. Override per box with any standard
  *  Home Assistant action (more-info, navigate, url, perform-action, none):
  *
  *    film_tap_action:    { action: more-info, entity: sensor.jellyha_unwatched_movies }
- *    series_tap_action:  { action: navigate, navigation_path: /lovelace/series }
- *    episodes_tap_action: { action: none }
- *    clients_tap_action: { action: more-info, entity: sensor.jellyha_active_sessions }
+ *    box1_tap_action:    { action: navigate, navigation_path: /lovelace/series }
+ *    box3_tap_action:    { action: none }
  *    latest_tap_action:  { action: url, url_path: http://jellyfin.local:8096 }
  *
  *    show_extras: true
@@ -56,6 +69,10 @@ class JellyfinLibraryCard extends HTMLElement {
       show_now_playing: true,
       show_paused: true,
       show_extras: true,
+      box1_type: "series",
+      box2_type: "episodes",
+      box3_type: "clients",
+      box4_type: "none",
       ...config,
     };
     this._shown = {};
@@ -86,16 +103,19 @@ class JellyfinLibraryCard extends HTMLElement {
     const act = name => ({ name, selector: { ui_action: {} } });
     const labels = {
       title: "Title", subtitle: "Subtitle",
-      entity: "Film count sensor", series_entity: "Series sensor", episodes_entity: "Episodes sensor",
-      library_entity: "Library totals sensor (fallback)", clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
-      show_extras: "Show series / episodes / clients boxes", show_latest: "Show latest added",
-      film_tap_action: "Film count tap action", series_tap_action: "Series tap action",
-      episodes_tap_action: "Episodes tap action", clients_tap_action: "Clients tap action",
-      latest_tap_action: "Latest added tap action",
+      entity: "Film count sensor", library_entity: "Library totals sensor (fallback, also used for songs/albums)",
+      clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
+      show_extras: "Show the boxes", show_latest: "Show latest added",
       show_now_playing: "Show who's watching", show_paused: "Include paused sessions",
       players: "Limit to these media players (blank = all JellyHA players)",
-      tap_actions: "Tap actions", entities: "Entities",
+      film_tap_action: "Film count tap action", latest_tap_action: "Latest added tap action",
+      tap_actions: "Other tap actions", entities: "Entities",
     };
+    [1, 2, 3, 4].forEach(n => Object.assign(labels, {
+      [`box${n}_type`]: "What to count", [`box${n}_name`]: "Label (optional)",
+      [`box${n}_entity`]: "Sensor (optional, overrides the type)", [`box${n}_attribute`]: "Attribute to read (optional)",
+      [`box${n}_tap_action`]: "Tap action",
+    }));
     return {
       schema: [
         {
@@ -118,14 +138,26 @@ class JellyfinLibraryCard extends HTMLElement {
         },
         { name: "players", selector: { entity: { domain: "media_player", multiple: true } } },
         {
-          type: "expandable", name: "entities", title: "Entities", expanded: true,
-          schema: [ent("entity"), ent("series_entity"), ent("episodes_entity"),
-                   ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")],
+          type: "expandable", name: "entities", title: "Entities", expanded: false,
+          schema: [ent("entity"), ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")],
         },
+        ...[1, 2, 3, 4].map(n => ({
+          type: "expandable", name: `box${n}`, title: `Box ${n}`, expanded: n === 1,
+          schema: [
+            { name: `box${n}_type`, selector: { select: { mode: "dropdown", options: [
+              { value: "none", label: "Hidden" }, { value: "series", label: "Series" }, { value: "episodes", label: "Episodes" },
+              { value: "songs", label: "Songs" }, { value: "albums", label: "Albums" }, { value: "artists", label: "Artists" },
+              { value: "videos", label: "Videos" }, { value: "movies", label: "Films" },
+              { value: "clients", label: "Active clients" }, { value: "custom", label: "Custom sensor" } ] } } },
+            { name: `box${n}_name`, selector: { text: {} } },
+            { name: `box${n}_entity`, selector: { entity: {} } },
+            { name: `box${n}_attribute`, selector: { text: {} } },
+            { name: `box${n}_tap_action`, selector: { ui_action: {} } },
+          ],
+        })),
         {
-          type: "expandable", name: "tap_actions", title: "Tap actions",
-          schema: [act("film_tap_action"), act("series_tap_action"), act("episodes_tap_action"),
-                   act("clients_tap_action"), act("latest_tap_action")],
+          type: "expandable", name: "tap_actions", title: "Other tap actions",
+          schema: [act("film_tap_action"), act("latest_tap_action")],
         },
       ],
       computeLabel: schema => labels[schema.name] || schema.name,
@@ -141,10 +173,31 @@ class JellyfinLibraryCard extends HTMLElement {
     return Number.isNaN(n) ? null : n;
   }
 
+  // Resolves one of the four configurable boxes (box1..box4).
+  _box(n) {
+    const c = this._config, type = c[`box${n}_type`] || "none";
+    if (type === "none") return null;
+    const ent = c[`box${n}_entity`], attr = c[`box${n}_attribute`];
+    let id, value = null, st = null;
+    if (ent) {
+      st = this._state(ent); id = ent;
+      if (st) value = this._num(attr ? st.attributes[attr] : st.state);
+    } else if (type === "clients") {
+      st = this._state(c.clients_entity); id = c.clients_entity;
+      if (st) value = this._num(st.state);
+    } else if (type !== "custom") {
+      ({ id, value } = this._src(type));
+    }
+    const names = { movies: "Films", series: "Series", episodes: "Episodes", songs: "Songs", albums: "Albums",
+                    artists: "Artists", videos: "Videos", clients: "Active clients" };
+    const label = c[`box${n}_name`] || (type === "custom" || ent ? (st && st.attributes.friendly_name) || ent : names[type] || type);
+    return { n, type, id, value, label, action: c[`box${n}_tap_action`] || c[`${type}_tap_action`] };
+  }
+
   // Finds a library count: configured sensor -> JellyHA library totals sensor -> any matching jellyha sensor.
   _src(kind) {
     const c = this._config;
-    const cfg = { movies: c.entity, series: c.series_entity, episodes: c.episodes_entity }[kind];
+    const cfg = { movies: c.entity, series: c.series_entity, episodes: c.episodes_entity }[kind] || `sensor.jellyha_${kind}`;
     const direct = this._state(cfg);
     if (direct && this._num(direct.state) !== null) return { id: cfg, value: this._num(direct.state) };
     const lib = this._state(c.library_entity);
@@ -157,6 +210,18 @@ class JellyfinLibraryCard extends HTMLElement {
       }
     }
     return { id: cfg, value: null };
+  }
+
+  // Latest film sensor: configured entity, else any jellyha "latest ... movie/film" sensor.
+  _latest() {
+    const direct = this._state(this._config.latest_entity);
+    if (direct) return direct;
+    if (!this._hass) return null;
+    for (const [id, st] of Object.entries(this._hass.states)) {
+      if (id.startsWith("sensor.") && id.includes("jellyha") && /latest/.test(id) && /movie|film/.test(id)
+          && st.state !== "unavailable" && st.state !== "unknown") return st;
+    }
+    return null;
   }
 
   _render() {
@@ -265,11 +330,15 @@ class JellyfinLibraryCard extends HTMLElement {
       series: [this._src("series").id || c.series_entity, c.series_tap_action],
       episodes: [this._src("episodes").id || c.episodes_entity, c.episodes_tap_action],
       clients: [c.clients_entity, c.clients_tap_action],
-      latest: [c.latest_entity, c.latest_tap_action],
+      latest: [(this._latest() || {}).entity_id || c.latest_entity, c.latest_tap_action],
     };
     if (key.startsWith("player:")) {
       this.dispatchEvent(new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId: key.slice(7) } }));
       return;
+    }
+    if (/^box[1-4]$/.test(key)) {
+      const bx = this._box(Number(key[3]));
+      if (bx) map[key] = [bx.id, bx.action];
     }
     const [entity, custom] = map[key] || [];
     const action = custom || { action: "more-info" };
@@ -300,30 +369,29 @@ class JellyfinLibraryCard extends HTMLElement {
     // Film count
     const total = this._src("movies").value;
     if (total === null) {
-      if (this._anim) this._anim.main = null;
-      this._shown.main = undefined;
+      main._tok = null;
+      main._val = undefined;
       main.innerHTML = `<span class="na">unavailable</span>`;
     }
-    else this._animate("main", main, total);
+    else {
+      if (main.querySelector(".na")) { main.textContent = "–"; main._val = undefined; }
+      this._animate("main", main, total);
+    }
 
     // Tiles
-    const tiles = [
-      ["series", "Series", this._src("series").value],
-      ["episodes", "Episodes", this._src("episodes").value],
-      ["clients", "Active clients", this._state(c.clients_entity) && this._num(this._state(c.clients_entity).state)],
-    ].filter(t => t[2] !== null && t[2] !== undefined);
+    const tiles = [1, 2, 3, 4].map(n => this._box(n)).filter(t => t && t.value !== null && t.value !== undefined);
     const extras = r.getElementById("extras");
-    const sig = tiles.map(t => t[0]).join();
+    const sig = tiles.map(t => `${t.n}:${t.label}`).join("|");
     if (extras.dataset.sig !== sig) {
       extras.dataset.sig = sig;
-      extras.innerHTML = tiles.map(t => `<div class="chip tap" data-key="${t[0]}"><b id="x-${t[0]}">–</b><span>${t[1]}</span></div>`).join("");
+      extras.innerHTML = tiles.map(t => `<div class="chip tap" data-key="box${t.n}"><b id="x-box${t.n}">–</b><span>${this._esc(t.label)}</span></div>`).join("");
     }
-    tiles.forEach(t => this._animate(t[0], r.getElementById(`x-${t[0]}`), t[2]));
+    tiles.forEach(t => this._animate(`box${t.n}`, r.getElementById(`x-box${t.n}`), t.value));
 
     this._updateNowPlaying();
 
     // Latest film added
-    const latest = c.show_latest ? this._state(c.latest_entity) : null;
+    const latest = c.show_latest ? this._latest() : null;
     const box = r.getElementById("latest");
     if (latest) {
       box.hidden = false;
@@ -388,14 +456,15 @@ class JellyfinLibraryCard extends HTMLElement {
     });
   }
 
+  // Count-up animation. State lives on the element, so a rebuilt element always gets its number.
   _animate(key, el, target) {
-    if (!el || this._shown[key] === target) return;
-    const start = this._shown[key] ?? 0;
-    this._shown[key] = target;
-    const token = (this._anim = this._anim || {})[key] = Symbol();
+    if (!el || el._val === target) return;
+    const start = el._val ?? 0;
+    el._val = target;
+    const token = (el._tok = Symbol());
     const dur = 1200, t0 = performance.now();
     const tick = now => {
-      if (this._anim[key] !== token) return; // superseded or cancelled
+      if (el._tok !== token) return; // superseded or cancelled
       const p = Math.min((now - t0) / dur, 1);
       el.textContent = Math.round(start + (target - start) * (1 - Math.pow(1 - p, 3))).toLocaleString();
       if (p < 1) requestAnimationFrame(tick);
