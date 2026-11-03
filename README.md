@@ -10,7 +10,7 @@ A Home Assistant Lovelace card for the [JellyHA](https://github.com/zupancicmark
 - Big animated film count
 - Up to four configurable boxes: series, episodes, songs, albums, artists, videos, active clients or any sensor
 - Jellyfin version badge
-- **Now watching**: every client currently playing (or paused), with poster, user, device and progress. Hidden when nobody is watching
+- **Now watching**: every client currently playing (or paused), with poster, user, device, progress bar and live elapsed / remaining time. Hidden when nobody is watching
 - **Latest added** film with backdrop art and poster
 - Tap any box to open the sensor pop-up, or set your own action
 - Full visual editor, no YAML needed
@@ -27,6 +27,7 @@ All entities default to JellyHA's names, so no config is needed.
 |---|---|---|
 | `entity` | `sensor.jellyha_movies` | Film count |
 | `clients_entity` | `sensor.jellyha_connected_clients` | Active clients |
+| `storage_entity` | `sensor.jellyha_media_storage_free` | Used by the `disk_used` / `disk_free` boxes |
 | `library_entity` | `sensor.jellyha_library` | Fallback: uses its movies/series/episodes attributes if a count sensor is missing |
 | `latest_entity` | `sensor.jellyha_latest_movie` | Latest film |
 | `version_entity` | `sensor.jellyha_jellyfin_version` | Jellyfin version |
@@ -45,7 +46,8 @@ Add, remove and reorder up to four boxes under the film count in the visual edit
 ```yaml
 type: custom:jellyfin-library-card
 boxes:
-  - type: series        # series | episodes | songs | albums | artists | videos | movies | clients | custom
+  - type: series        # series | episodes | songs | albums | artists | videos | movies | clients
+                        # | disk_used | disk_free | library_size | custom
   - type: episodes
   - type: songs
   - type: custom        # any numeric sensor
@@ -55,4 +57,6 @@ boxes:
     tap_action:         # optional
       action: none
 ```
+`disk_used` and `disk_free` read the storage sensor; `library_size` adds up every `sensor.jellyha_library_*_storage_size`. A box opens its own sensor when tapped.
+
 With no `boxes`, you get series, episodes and active clients. `boxes: []` hides the row. The older `box1_type` ... `box4_type` settings still work.

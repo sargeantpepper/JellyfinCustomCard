@@ -32,7 +32,8 @@
  *  editor, or in YAML (remove the list, or use `boxes: []`, to hide the row):
  *
  *    boxes:
- *      - type: series          # series | episodes | songs | albums | artists | videos | movies | clients | custom
+ *      - type: series          # series | episodes | songs | albums | artists | videos | movies | clients
+ *                              # | disk_used | disk_free | library_size | custom
  *      - type: episodes
  *      - type: songs
  *      - type: custom          # any numeric sensor
@@ -42,7 +43,8 @@
  *        tap_action: { action: none }   # optional
  *
  *  Default (no `boxes`): series, episodes, active clients.
- *  Songs/albums/artists/videos come from the library sensor's attributes.
+ *  disk_used / disk_free read sensor.jellyha_media_storage_free; library_size adds up every
+ *  sensor.jellyha_library_*_storage_size. Songs/albums/artists/videos come from the library sensor's attributes.
  *  The older box1_type ... box4_type settings still work if you have them.
  *
  *  Tapping a box opens that sensor's pop-up. Override per box with any standard
@@ -71,6 +73,7 @@ class JellyfinLibraryCard extends HTMLElement {
       episodes_entity: "sensor.jellyha_episodes",
       latest_entity: "sensor.jellyha_latest_movie",
       library_entity: "sensor.jellyha_library",
+      storage_entity: "sensor.jellyha_media_storage_free",
       clients_entity: "sensor.jellyha_connected_clients",
       version_entity: "sensor.jellyha_jellyfin_version",
       title: "Film Collection",
@@ -128,7 +131,7 @@ class JellyfinLibraryCard extends HTMLElement {
     const labels = {
       title: "Title", subtitle: "Subtitle",
       entity: "Film count sensor", library_entity: "Library totals sensor (fallback, also used for songs/albums)",
-      clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
+      storage_entity: "Disk storage sensor (for disk used / free)", clients_entity: "Active clients sensor", latest_entity: "Latest film sensor", version_entity: "Jellyfin version sensor",
       show_extras: "Show the boxes", show_latest: "Show latest added",
       show_now_playing: "Show who's watching", show_paused: "Include paused sessions",
       players: "Limit to these media players (blank = all JellyHA players)",
@@ -145,7 +148,7 @@ class JellyfinLibraryCard extends HTMLElement {
           { name: "show_now_playing", selector: { boolean: {} } }, { name: "show_paused", selector: { boolean: {} } } ] },
         { name: "players", selector: { entity: { domain: "media_player", multiple: true } } },
         { type: "expandable", name: "", title: "Entities", expanded: false,
-          schema: [ent("entity"), ent("library_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")] },
+          schema: [ent("entity"), ent("library_entity"), ent("storage_entity"), ent("clients_entity"), ent("latest_entity"), ent("version_entity")] },
         { type: "expandable", name: "", title: "Other tap actions",
           schema: [act("film_tap_action"), act("latest_tap_action")] },
       ],
@@ -166,30 +169,100 @@ class JellyfinLibraryCard extends HTMLElement {
     const c = this._config, sp = JellyfinLibraryCard._specsFromConfig(c)[n - 1];
     if (!sp) return null;
     const type = sp.type, ent = sp.entity, attr = sp.attribute;
-    let id, value = null, st = null;
+    let id, value = null, text, st = null;
     if (ent) {
+      // any sensor: show decimals and the sensor's unit when it has them
       st = this._state(ent); id = ent;
-      if (st) value = this._num(attr ? st.attributes[attr] : st.state);
+      const f = st ? parseFloat(attr ? st.attributes[attr] : st.state) : NaN;
+      if (!Number.isNaN(f)) {
+        const unit = attr ? "" : st.attributes.unit_of_measurement;
+        if (unit || !Number.isInteger(f)) text = this._fmtNum(f) + (unit ? `<small>${this._esc(unit)}</small>` : "");
+        else value = f;
+      }
     } else if (type === "clients") {
       st = this._state(c.clients_entity); id = c.clients_entity;
       if (st) value = this._num(st.state);
+    } else if (type === "disk_free" || type === "disk_used") {
+      ({ id, text } = this._disk(type));
+    } else if (type === "library_size") {
+      ({ id, text } = this._libSize());
     } else if (type !== "custom") {
       ({ id, value } = this._src(type));
     }
     const names = { movies: "Films", series: "Series", episodes: "Episodes", songs: "Songs", albums: "Albums",
-                    artists: "Artists", videos: "Videos", clients: "Active clients" };
+                    artists: "Artists", videos: "Videos", clients: "Active clients",
+                    disk_free: "Disk free", disk_used: "Disk used", library_size: "Library size" };
     const label = sp.name || (type === "custom" || ent ? (st && st.attributes.friendly_name) || ent : names[type] || type);
-    return { n, type, id, value, label, action: sp.tap_action || c[`${type}_tap_action`] };
+    return { n, type, id, value, text, label, action: sp.tap_action || c[`${type}_tap_action`] };
   }
 
-  // Finds a library count: configured sensor -> JellyHA library totals sensor -> any matching jellyha sensor.
+  _fmtNum(v) { return Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
+
+  // Bytes -> "12.4 TB". Uses 1024 or 1000 steps to match the storage sensor's own numbers.
+  _fmtBytes(bytes, base) {
+    const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let i = 0, v = Number(bytes);
+    while (v >= base && i < units.length - 1) { v /= base; i++; }
+    const d = v >= 100 || i < 3 ? 0 : v >= 10 ? 1 : 2;
+    return `${this._fmtNum(Number(v.toFixed(d)))}<small>${units[i]}</small>`;
+  }
+
+  _storageSensor() {
+    const c = this._config;
+    const st = this._state(c.storage_entity);
+    if (st) return { id: c.storage_entity, st };
+    if (this._hass) for (const [id, s] of Object.entries(this._hass.states))
+      if (id.startsWith("sensor.") && id.includes("jellyha") && /media_storage_free$/.test(id) && s.state !== "unavailable") return { id, st: s };
+    return { id: c.storage_entity, st: null };
+  }
+
+  _base(a) {
+    // total_bytes / total_tb tells us whether the integration divides by 1024 or 1000
+    const r = Number(a.total_bytes) / Number(a.total_tb);
+    return r > 1.05e12 ? 1024 : 1000;
+  }
+
+  _disk(type) {
+    const { id, st } = this._storageSensor();
+    if (!st) return { id };
+    const a = st.attributes;
+    const bytes = type === "disk_free" ? Number(a.free_bytes) : Number(a.used_bytes);
+    if (Number.isNaN(bytes)) return { id };
+    return { id, text: this._fmtBytes(bytes, this._base(a)) };
+  }
+
+  // Combined size of all libraries (sensor.jellyha_library_*_storage_size)
+  _libSize() {
+    if (!this._hass) return {};
+    const subs = Object.entries(this._hass.states).filter(([id, s]) =>
+      /^sensor\.jellyha_library_.*_storage_size$/.test(id) && s.state !== "unavailable" && s.state !== "unknown");
+    if (!subs.length) return { id: "sensor.jellyha_library" };
+    let total = 0;
+    for (const [, s] of subs) {
+      const b = Number(s.attributes.size_bytes);
+      total += !Number.isNaN(b) ? b : (parseFloat(s.state) || 0) * 1e9;
+    }
+    return { id: subs[0][0], text: this._fmtBytes(total, this._base(this._storageSensor().st ? this._storageSensor().st.attributes : {})) };
+  }
+
+  // The kind's own sensor (e.g. sensor.jellyha_series) if it exists at all, even when its state is unusable.
+  _own(kind) {
+    const c = this._config;
+    const cfg = { movies: c.entity, series: c.series_entity, episodes: c.episodes_entity }[kind] || `sensor.jellyha_${kind}`;
+    if (!this._hass) return null;
+    if (this._hass.states[cfg]) return cfg;
+    const bad = /unwatched|watched|favorite|latest|percentage|total/;
+    return Object.keys(this._hass.states).find(id => id.startsWith("sensor.") && id.includes("jellyha")
+      && id.endsWith("_" + kind) && !bad.test(id)) || null;
+  }
+
   _src(kind) {
     const c = this._config;
     const cfg = { movies: c.entity, series: c.series_entity, episodes: c.episodes_entity }[kind] || `sensor.jellyha_${kind}`;
     const direct = this._state(cfg);
     if (direct && this._num(direct.state) !== null) return { id: cfg, value: this._num(direct.state) };
     const lib = this._state(c.library_entity);
-    if (lib && this._num(lib.attributes[kind]) !== null) return { id: c.library_entity, value: this._num(lib.attributes[kind]) };
+    if (lib && this._num(lib.attributes[kind]) !== null) return { id: this._own(kind) || c.library_entity, value: this._num(lib.attributes[kind]) };
     if (this._hass) {
       const bad = /unwatched|watched|favorite|latest|percentage|total/;
       for (const [id, st] of Object.entries(this._hass.states)) {
@@ -248,7 +321,8 @@ class JellyfinLibraryCard extends HTMLElement {
         .chip { padding: 9px 10px; border-radius: 14px; background: rgba(255,255,255,.09);
           backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.12); min-width: 0; }
         .chip b { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
-        .chip span { font-size: .58rem; opacity: .65; text-transform: uppercase; letter-spacing: .6px; white-space: nowrap; }
+        .chip b small { font-size: .55em; font-weight: 600; opacity: .7; margin-left: 3px; letter-spacing: .5px; }
+        .chip span { font-size: .54rem; opacity: .65; text-transform: uppercase; letter-spacing: .35px; white-space: nowrap; display: block; overflow: hidden; text-overflow: ellipsis; }
         .latest { position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; margin-top: 14px;
           padding: 12px; min-height: 72px; border-radius: 14px; background: rgba(0,0,0,.25) center/cover no-repeat;
           border: 0; }
@@ -282,6 +356,8 @@ class JellyfinLibraryCard extends HTMLElement {
         .row .who { opacity: .9; margin-top: 3px; }
         .row .bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,.15); margin-top: 6px; overflow: hidden; }
         .row .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #aa5cc3, #00a4dc); transition: width 1s linear; }
+        .row .times { display: flex; justify-content: space-between; margin-top: 4px; font-size: .66rem; opacity: .7;
+          font-variant-numeric: tabular-nums; letter-spacing: .3px; }
         .row .st { flex: none; --mdc-icon-size: 22px; opacity: .85; }
         .tap { cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform .15s, background-color .15s; }
         .row.tap:hover { background: rgba(255,255,255,.14); }
@@ -373,7 +449,7 @@ class JellyfinLibraryCard extends HTMLElement {
     }
 
     // Tiles
-    const tiles = [1, 2, 3, 4].map(n => this._box(n)).filter(t => t && t.value !== null && t.value !== undefined);
+    const tiles = [1, 2, 3, 4].map(n => this._box(n)).filter(t => t && ((t.value !== null && t.value !== undefined) || t.text !== undefined));
     const extras = r.getElementById("extras");
     extras.hidden = !c.show_extras || !tiles.length;
     const sig = tiles.map(t => `${t.n}:${t.label}`).join("|");
@@ -381,7 +457,11 @@ class JellyfinLibraryCard extends HTMLElement {
       extras.dataset.sig = sig;
       extras.innerHTML = tiles.map(t => `<div class="chip tap" data-key="box${t.n}"><b id="x-box${t.n}">–</b><span>${this._esc(t.label)}</span></div>`).join("");
     }
-    tiles.forEach(t => this._animate(`box${t.n}`, r.getElementById(`x-box${t.n}`), t.value));
+    tiles.forEach(t => {
+      const el = r.getElementById(`x-box${t.n}`);
+      if (t.text !== undefined) { el._tok = null; el._val = undefined; if (el.innerHTML !== t.text) el.innerHTML = t.text; }
+      else this._animate(`box${t.n}`, el, t.value);
+    });
 
     this._updateNowPlaying();
 
@@ -460,15 +540,61 @@ class JellyfinLibraryCard extends HTMLElement {
         return `<div class="row tap" data-key="player:${this._esc(id)}">
           <div class="art" data-srcs="${this._esc(JSON.stringify([a.entity_picture, a.media_image_url, a.entity_picture_local, a.poster_url].filter(Boolean)))}"></div>
           <div class="info"><div class="t">${this._esc(title)}</div>${sub ? `<div class="s">${this._esc(sub)}</div>` : ""}
-            <div class="who">${this._esc(who)}</div><div class="bar"><i data-id="${this._esc(id)}"></i></div></div>
+            <div class="who">${this._esc(who)}</div><div class="bar"><i data-id="${this._esc(id)}"></i></div>
+            <div class="times" data-id="${this._esc(id)}"><span class="el">–</span><span class="rem"></span></div></div>
           <ha-icon class="st" icon="${state === "paused" ? "mdi:pause-circle-outline" : "mdi:play-circle-outline"}"></ha-icon></div>`;
       }).join("");
       box.querySelectorAll(".art").forEach(el => this._loadArt(el));
     }
-    list.forEach(({ id, a }) => {
+    this._rows = list;
+    this._tickTimes();
+    // keep elapsed/remaining moving between state updates while something is playing
+    const playing = list.some(x => x.state === "playing");
+    if (playing && !this._timer) this._timer = setInterval(() => this._tickTimes(), 1000);
+    if (!playing && this._timer) { clearInterval(this._timer); this._timer = null; }
+  }
+
+  disconnectedCallback() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
+
+  _fmt(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60;
+    return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
+  }
+
+  _tickTimes() {
+    const box = this.shadowRoot && this.shadowRoot.getElementById("nowp");
+    if (!box || !this._rows) return;
+    this._pos = this._pos || {};
+    for (const { id, state, a } of this._rows) {
+      let dur = Number(a.media_duration) || (Number(a.runtime_minutes) || 0) * 60;
+      let pos = Number(a.media_position);
+      if (!(pos >= 0)) pos = dur && a.progress_percent != null ? (Number(a.progress_percent) / 100) * dur : NaN;
+      let elapsed = pos;
+      if (state === "playing" && !Number.isNaN(pos)) {
+        // add the time since the position was last reported
+        const upd = a.media_position_updated_at ? Date.parse(a.media_position_updated_at) : NaN;
+        let base;
+        if (!Number.isNaN(upd)) base = upd;
+        else {
+          const rec = this._pos[id];
+          if (!rec || rec.pos !== pos) this._pos[id] = { pos, ts: Date.now() };
+          base = this._pos[id].ts;
+        }
+        elapsed = pos + Math.max(0, (Date.now() - base) / 1000);
+      }
+      if (dur) elapsed = Math.min(elapsed, dur);
+      const row = box.querySelector(`.times[data-id="${CSS.escape(id)}"]`);
+      if (row && !Number.isNaN(elapsed)) {
+        row.querySelector(".el").textContent = this._fmt(elapsed);
+        row.querySelector(".rem").textContent = dur ? "-" + this._fmt(dur - elapsed) : "";
+      }
       const bar = box.querySelector(`i[data-id="${CSS.escape(id)}"]`);
-      if (bar) bar.style.width = Math.max(0, Math.min(100, Number(a.progress_percent) || 0)) + "%";
-    });
+      if (bar) {
+        const pct = dur && !Number.isNaN(elapsed) ? (elapsed / dur) * 100 : Number(a.progress_percent) || 0;
+        bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      }
+    }
   }
 
   // Count-up animation. State lives on the element, so a rebuilt element always gets its number.
@@ -558,7 +684,7 @@ class JellyfinLibraryCardEditor extends HTMLElement {
     });
     this.shadowRoot.getElementById("add").addEventListener("click", () => {
       if (this._boxes.length >= 4) return;
-      const order = ["series", "episodes", "songs", "albums", "artists", "videos", "clients", "movies"];
+      const order = ["series", "episodes", "songs", "albums", "artists", "videos", "clients", "movies", "disk_used", "disk_free", "library_size"];
       const used = new Set(this._boxes.map(b => b.type));
       this._boxes.push({ type: order.find(t => !used.has(t)) || "custom" });
       this._renderBoxes(); this._emit();
@@ -569,7 +695,8 @@ class JellyfinLibraryCardEditor extends HTMLElement {
     const list = this.shadowRoot.getElementById("list");
     list.innerHTML = ""; this._forms = [];
     const TYPES = [["series", "Series"], ["episodes", "Episodes"], ["songs", "Songs"], ["albums", "Albums"],
-      ["artists", "Artists"], ["videos", "Videos"], ["movies", "Films"], ["clients", "Active clients"], ["custom", "Custom sensor"]];
+      ["artists", "Artists"], ["videos", "Videos"], ["movies", "Films"], ["clients", "Active clients"],
+      ["disk_used", "Disk used"], ["disk_free", "Disk free"], ["library_size", "Library size"], ["custom", "Custom sensor"]];
     const typeLabel = t => (TYPES.find(x => x[0] === t) || [, t])[1];
     const schema = [
       { name: "type", selector: { select: { mode: "dropdown", options: TYPES.map(([value, label]) => ({ value, label })) } } },
